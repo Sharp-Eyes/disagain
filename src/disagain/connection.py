@@ -355,6 +355,11 @@ class Connection:
             raise
 
 
+def _list_to_dict(arg: list[bytes]) -> dict[bytes, bytes]:
+    arg_iter = iter(arg)
+    return dict(zip(arg_iter, arg_iter, strict=True))
+
+
 @dataclasses.dataclass(slots=True)
 class ActionableConnection:
     """High-level connection implementation.
@@ -468,4 +473,20 @@ class ActionableConnection:
             cmd.arg(stream).arg(start_id)
 
         await self.connection.write_command(cmd)
-        return await self.connection.read_response(disconnect_on_error=True)
+        response = await self.connection.read_response(disconnect_on_error=True)
+
+        # Response is of shape
+        #
+        # dict: stream name -> entries
+        #                 list entries: [entry id, data]
+        #                                     list data: [key 1, value 1, key 2, value 2, ...]
+        # We transform this into
+        #
+        # dict: stream name -> entries
+        #                 dict entries: entry id -> data
+        #                                      dict data: key -> value
+
+        return {
+            stream_name: {entry_id: _list_to_dict(data) for entry_id, data in entries}
+            for stream_name, entries in response.items()
+        }
