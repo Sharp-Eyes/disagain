@@ -481,16 +481,27 @@ class ActionableConnection:
 
         # Response is of shape
         #
-        # dict: stream name -> entries
-        #                 list entries: [entry id, data]
-        #                                     list data: [key 1, value 1, key 2, value 2, ...]
+        # dict: stream name -> [entries...]
+        #              b        entries: [id, [data...]]
+        #                                 b    data: [key 1, value 1, key 2, value 2, ...]
+        #                                             b      b        b      b
         # We transform this into
         #
-        # dict: stream name -> entries
-        #                 dict entries: entry id -> data
-        #                                      dict data: key -> value
+        # dict: stream name -> [entries...]
+        #              b        entries: [StreamEntry(id, {data}), ...]
+        #                                             b    data: key -> value
+        #                                                        b      b
 
         return {
-            stream_name: {entry_id: _list_to_dict(data) for entry_id, data in entries}
+            stream_name: list(map(StreamEntry.from_raw, entries))
             for stream_name, entries in response.items()
         }
+
+
+class StreamEntry(typing.NamedTuple):
+    id: bytes
+    data: collections.abc.Mapping[bytes, bytes]
+
+    @classmethod
+    def from_raw(cls, raw: typing.Any) -> "typing_extensions.Self":  # noqa: ANN401
+        return cls(raw[0], _list_to_dict(raw[1]))
