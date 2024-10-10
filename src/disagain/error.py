@@ -9,16 +9,13 @@ __all__: collections.abc.Sequence[str] = (
 )
 
 
-class RedisError(Exception):
-    ...
+class RedisError(Exception): ...
 
 
-class ConnectionError(RedisError):
-    ...
+class ConnectionError(RedisError): ...
 
 
-class StateError(RedisError):
-    ...
+class StateError(RedisError): ...
 
 
 @dataclasses.dataclass
@@ -28,7 +25,7 @@ class ResponseError(RedisError):
 
     def __str__(self) -> str:
         return self.message
-    
+
     @classmethod
     def from_response(cls, response: bytes) -> "ResponseError":
         code, message = response.decode("utf-8", errors="replace").split(" ", 1)

@@ -1,10 +1,12 @@
+"""Module containing connection implementations."""
+
 import asyncio
 import collections.abc
 import dataclasses
 import enum
+import socket
 import typing
 import urllib.parse
-import socket
 import weakref
 
 from disagain import command, error, protocol
@@ -12,10 +14,15 @@ from disagain import command, error, protocol
 if typing.TYPE_CHECKING:
     import typing_extensions
 
-__all__: collections.abc.Sequence[str] = ("Connection", "ActionableConnection",)
+__all__: collections.abc.Sequence[str] = ("Connection", "ActionableConnection")
 
 
-ConnectHook: typing.TypeAlias = typing.Callable[["Connection"], typing.Coroutine[typing.Any, typing.Any, None]]    
+_RESP3: typing.Final = 3
+
+ConnectHook: typing.TypeAlias = typing.Callable[
+    ["Connection"],
+    typing.Coroutine[typing.Any, typing.Any, None],
+]
 
 
 class ByteResponse(bytes, enum.Enum):
@@ -44,6 +51,14 @@ class ByteResponse(bytes, enum.Enum):
 
 @dataclasses.dataclass(slots=True)
 class Connection:
+    """Low-level connection implementation.
+
+    This connection can make connections to Redis, and both send and receive
+    commands. It does not implement any higher-level commands.
+
+    Only RESP3 connections are supported.
+    """
+
     host: str
     port: int
     buffer_limit: int = 6000
@@ -56,22 +71,24 @@ class Connection:
 
     @classmethod
     async def from_url(cls, url: str, /) -> "typing_extensions.Self":
+        """Connect to the provided Redis url."""
         parsed = urllib.parse.urlparse(url)
         if not parsed.hostname or not parsed.port or parsed.scheme != "redis":
             msg = "Only urls of scheme 'redis://host:port' are supported"
             raise ValueError(msg)
-        
+
         return await cls.from_host_port(parsed.hostname, parsed.port)
 
     @classmethod
     async def from_host_port(cls, host: str, port: int, /) -> "typing_extensions.Self":
-        self = cls(host=host, port=port,)
+        """Connect to Redis at the provided host and port."""
+        self = cls(host=host, port=port)
 
         async def _set_resp3(con: protocol.ConnectionProto) -> None:
-            await con.write_command(command.Command(b"HELLO", b"3"))
+            await con.write_command(command.Command(b"HELLO", _RESP3))
             hello = await con.read_response(disconnect_on_error=True)
 
-            if hello[b"proto"] != 3:
+            if hello[b"proto"] != _RESP3:
                 msg = "Failed to set redis protocol version to 3"
                 raise error.RedisError(msg)
 
@@ -80,7 +97,7 @@ class Connection:
         await self.connect()
         return self
 
-    def __del__(self):
+    def __del__(self) -> None:
         if getattr(self, "_writer", None):
             self._close()
 
@@ -93,16 +110,12 @@ class Connection:
 
         return writer
 
-    def is_connected(self) -> bool:
+    def is_alive(self) -> bool:
+        """Check whether this connection has an active redis connection."""
         return self._reader is not None and self._writer is not None
 
-    def _assert_connected(self) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
-        if self._reader is None or self._writer is None:
-            raise error.StateError
-        
-        return self._reader, self._writer
-
     async def connect(self) -> None:
+        """Connect to Redis with the connection parameters provided at instantiation."""
         try:
             reader, writer = await asyncio.open_connection(
                 self.host,
@@ -118,7 +131,7 @@ class Connection:
 
         except Exception as exc:
             raise ConnectionError from exc
-        
+
         self._reader = reader
         self._writer = writer
 
@@ -126,15 +139,24 @@ class Connection:
             await hook(self)
 
     async def disconnect(self) -> None:
-        if not self.is_connected():
-            return
+        """Close the connection with Redis."""
+        if not self.is_alive():
+            msg = "The connection is already closed."
+            raise error.StateError(msg)
 
         closing_writer = self._close()
         await closing_writer.wait_closed()
-    
+
     async def write_command(self, command: protocol.CommandProto, /) -> None:
-        if not self.is_connected():
-            msg = "Cannot send commands to a disconnected client."
+        """Write a command to the connected Redis instance.
+
+        This requires this connection to be alive.
+
+        Either ``read_response`` or ``discard_response`` *must* be called after
+        this.
+        """
+        if not self.is_alive():
+            msg = "Cannot send commands to a closed connection."
             raise error.StateError(msg)
 
         assert self._writer is not None
@@ -154,13 +176,13 @@ class Connection:
             if len(exc.args) == 1:
                 error_code = "UNKNOWN"
                 error_msg = exc.args[0]
-            
+
             else:
                 error_code, error_msg, *_ = exc.args
 
             msg = f"Writing to '{self.host}:{self.port}' raised {error_code}: {error_msg}"
             raise ConnectionError(msg) from exc
-    
+
         except BaseException:
             self._close()
             raise
@@ -170,14 +192,14 @@ class Connection:
         assert n > 0
 
         response = await self._reader.read(n + 2)
-        
+
         if response[-2:] == b"\r\n":
             return response[:-2]
 
         msg = "reading data from stream returned incomplete response."
         raise ConnectionError(msg)
 
-    async def _read_response(self) -> object:
+    async def _read_response(self) -> object:  # noqa: C901, PLR0911, PLR0912
         assert self._reader is not None
 
         data = await self._reader.readuntil(b"\r\n")
@@ -191,60 +213,56 @@ class Connection:
 
         if byte == ByteResponse.SIMPLE_ERROR:
             raise error.ResponseError.from_response(response)
-            
+
         if byte == ByteResponse.BLOB_ERROR:
             response = await self._read_bytes(int(response))
             raise error.ResponseError.from_response(response)
 
-        elif byte == ByteResponse.SIMPLE_STRING:
+        if byte == ByteResponse.SIMPLE_STRING:
             return response
-        
-        elif byte == ByteResponse.BLOB_STRING:
+
+        if byte == ByteResponse.BLOB_STRING:
             return await self._read_bytes(int(response))
 
-        elif byte == ByteResponse.VERBATIM_STRING:
+        if byte == ByteResponse.VERBATIM_STRING:
             # TODO: Maybe store the format instead of discarding it.
             return (await self._read_bytes(int(response)))[4:]
 
-        elif byte in (ByteResponse.NUMBER, ByteResponse.BIG_NUMBER):
+        if byte in (ByteResponse.NUMBER, ByteResponse.BIG_NUMBER):
             return int(response)
-        
-        elif byte == ByteResponse.DOUBLE:
+
+        if byte == ByteResponse.DOUBLE:
             return float(response)
-        
-        elif byte == ByteResponse.BOOLEAN:
+
+        if byte == ByteResponse.BOOLEAN:
             return response == b"t"
 
-        elif byte == ByteResponse.NULL:
+        if byte == ByteResponse.NULL:
             return None
 
-        elif byte in ByteResponse.ARRAY:
-            return [
-                await self._read_response() for _ in range(int(response))
-            ]
+        if byte in ByteResponse.ARRAY:
+            return [await self._read_response() for _ in range(int(response))]
 
-        elif byte in ByteResponse.SET:
-            return {
-                await self._read_response() for _ in range(int(response))
-            }
+        if byte in ByteResponse.SET:
+            return {await self._read_response() for _ in range(int(response))}
 
-        elif byte == ByteResponse.MAP:
+        if byte == ByteResponse.MAP:
             return {
                 await self._read_response(): await self._read_response()
                 for _ in range(int(response))
             }
-        
-        elif byte == ByteResponse.PUSH:
+
+        if byte in (ByteResponse.PUSH, ByteResponse.ATTRIBUTE):
             raise NotImplementedError
 
-        elif byte == ByteResponse.ATTRIBUTE:
-            raise NotImplementedError
+        msg = f"{byte} is not a valid response type"
+        raise error.ResponseError(byte.decode("utf-8", errors="replace"), msg)
 
-        else:
-            msg = f"{byte} is not a valid response type"
-            raise error.ResponseError(byte.decode("utf-8", errors="replace"), msg)
+    async def read_response(self, *, disconnect_on_error: bool = True) -> typing.Any:  # noqa: ANN401
+        """Read the response to a previously executed command.
 
-    async def read_response(self, *, disconnect_on_error: bool = True) -> typing.Any:
+        This requires this connection to be alive.
+        """
         try:
             return await self._read_response()
 
@@ -254,7 +272,7 @@ class Connection:
 
             msg = f"Failed to read from '{self.host}:{self.port}': {exc}"
             raise ConnectionError(msg) from exc
-        
+
         except BaseException:
             if disconnect_on_error:
                 await self.disconnect()
@@ -284,39 +302,42 @@ class Connection:
         ):
             return
 
-        elif byte in (
+        if byte in (
             ByteResponse.BLOB_ERROR,
             ByteResponse.BLOB_STRING,
             ByteResponse.VERBATIM_STRING,
         ):
             await self._reader.read(int(response))
             return
-        
-        elif byte in (
+
+        if byte in (
             ByteResponse.ARRAY,
             ByteResponse.SET,
         ):
             await self._discard_response()
             return
 
-        elif byte == ByteResponse.MAP:
+        if byte == ByteResponse.MAP:
             await self._discard_response()
             await self._discard_response()
             return
-        
-        elif byte == ByteResponse.PUSH:
+
+        if byte == ByteResponse.PUSH:
             # Can't just return None here as we actually need to consume the bytes.
             # We need to error until these are implemented.
             raise NotImplementedError
 
-        elif byte == ByteResponse.ATTRIBUTE:
+        if byte == ByteResponse.ATTRIBUTE:
             raise NotImplementedError
-        
-        else:
-            # Unknown response type but we're ignoring it anyway.
-            return
 
-    async def discard_response(self, *, disconnect_on_error: bool = True) -> typing.Any:
+        # Unknown response type but we're ignoring the response anyway.
+        return
+
+    async def discard_response(self, *, disconnect_on_error: bool = True) -> typing.Any:  # noqa: ANN401
+        """Discard the response to the previously executed command.
+
+        This requires this connection to be alive.
+        """
         try:
             return await self._discard_response()
 
@@ -326,7 +347,7 @@ class Connection:
 
             msg = f"Failed to read from '{self.host}:{self.port}': {exc}"
             raise ConnectionError(msg) from exc
-        
+
         except BaseException:
             if disconnect_on_error:
                 await self.disconnect()
@@ -334,8 +355,17 @@ class Connection:
             raise
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(slots=True)
 class ActionableConnection:
+    """High-level connection implementation.
+
+    This connection can make connections to Redis, and both send and receive
+    commands. This connection implements higher-level commands to make it more
+    convenient to run commonly-used commands.
+
+    Only RESP3 connections are supported.
+    """
+
     connection: protocol.ConnectionProto
 
     @classmethod
@@ -344,17 +374,18 @@ class ActionableConnection:
         url: str,
         /,
         *,
-        connection_class: type[protocol.ConnectionProto] = Connection
+        connection_class: type[protocol.ConnectionProto] = Connection,
     ) -> "typing_extensions.Self":
+        """Connect to the provided Redis url."""
         parsed = urllib.parse.urlparse(url)
         if not parsed.hostname or not parsed.port or parsed.scheme != "redis":
             msg = "Only urls of scheme 'redis://host:port' are supported"
             raise ValueError(msg)
-        
+
         return await cls.from_host_port(
             parsed.hostname,
             parsed.port,
-            connection_class=connection_class
+            connection_class=connection_class,
         )
 
     @classmethod
@@ -364,24 +395,42 @@ class ActionableConnection:
         port: int,
         /,
         *,
-        connection_class: type[protocol.ConnectionProto] = Connection
+        connection_class: type[protocol.ConnectionProto] = Connection,
     ) -> "typing_extensions.Self":
+        """Connect to Redis at the provided host and port."""
         connection = await connection_class.from_host_port(host, port)
         return cls(connection)
 
     async def connect(self) -> None:
+        """Connect to Redis with the connection parameters provided at instantiation."""
         await self.connection.connect()
 
     async def disconnect(self) -> None:
+        """Close the connection with Redis."""
         await self.connection.disconnect()
 
     async def write_command(self, command: protocol.CommandProto, /) -> None:
+        """Write a command to the connected Redis instance.
+
+        This requires this connection to be alive.
+
+        Either ``read_response`` or ``discard_response`` *must* be called after
+        this.
+        """
         await self.connection.write_command(command)
 
-    async def read_response(self, *, disconnect_on_error: bool = True) -> typing.Any:
+    async def read_response(self, *, disconnect_on_error: bool = True) -> typing.Any:  # noqa: ANN401
+        """Read the response to a previously executed command.
+
+        This requires this connection to be alive.
+        """
         return await self.connection.read_response(disconnect_on_error=disconnect_on_error)
 
     async def discard_response(self, *, disconnect_on_error: bool = True) -> None:
+        """Discard the response to the previously executed command.
+
+        This requires this connection to be alive.
+        """
         return await self.connection.discard_response(disconnect_on_error=disconnect_on_error)
 
     async def xread(
@@ -390,15 +439,30 @@ class ActionableConnection:
         *,
         count: int | None = None,
         block: int | None = None,
-    ) -> typing.Any:
+    ) -> typing.Any:  # noqa: ANN401
+        """Read data from one or multiple streams.
+
+        Returns all stream entries after the provided id. Valid ids include any
+        actual id, 0 to start at the beginning of the stream, or $ to start at
+        the end of the stream (this is only useful when block is set).
+
+        If count is provided, return at most <count> entries.
+
+        If block is provided, wait up to <block> [ms] for one or more entries
+        to be added to the stream if it would otherwise return empty. Block can
+        be set to 0 to block indefinitely.
+
+        See also: https://redis.io/docs/latest/commands/xread/
+        """
+        # TODO: Proper xread return type
         cmd = command.Command(b"XREAD")
 
         if count is not None:
             cmd.arg(b"COUNT").arg(count)
-        
+
         if block is not None:
             cmd.arg(b"BLOCK").arg(block)
-        
+
         cmd.arg(b"STREAMS")
         for stream, start_id in streams.items():
             cmd.arg(stream).arg(start_id)

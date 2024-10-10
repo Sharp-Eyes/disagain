@@ -14,3 +14,29 @@ typing = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "ruff>=0.6.9",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "ALL",  # Include everything, including new rules.
+]
+ignore = [
+    "D105",  # __magic_method__ docstrings.
+    "D107",  # __init__ docstrings.
+    "FIX",  # TODO-comments are to-do for a reason. 
+    "PLC0414",  # reexports through from x import y as y.
+    "PYI041",  # int | float typehints.
+    "S101",  # Assert statements; we use these mainly for type assertions.
+    "TD",  # TODO-comments are to-do for a reason.
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F403"]
