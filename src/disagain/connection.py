@@ -81,11 +81,14 @@ class Connection:
         if getattr(self, "_writer", None):
             self._close()
 
-    def _close(self):
-        if self._writer:
-            self._writer.close()
+    def _close(self) -> asyncio.StreamWriter:
+        assert self._writer
 
+        writer = self._writer
+        writer.close()
         self._writer = self._reader = None
+
+        return writer
 
     def is_connected(self) -> bool:
         return self._reader is not None and self._writer is not None
@@ -123,10 +126,8 @@ class Connection:
         if not self.is_connected():
             return
 
-        assert self._writer is not None
-
-        await self._writer.wait_closed()
-        self._reader = self._writer = None
+        closing_writer = self._close()
+        await closing_writer.wait_closed()
     
     async def write_command(self, command: protocol.CommandProto, /) -> None:
         if not self.is_connected():
