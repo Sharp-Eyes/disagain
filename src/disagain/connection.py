@@ -250,14 +250,86 @@ class Connection:
 
         except OSError as exc:
             if disconnect_on_error:
-                self._close()
+                await self.disconnect()
 
             msg = f"Failed to read from '{self.host}:{self.port}': {exc}"
             raise ConnectionError(msg) from exc
         
         except BaseException:
             if disconnect_on_error:
-                self._close()
+                await self.disconnect()
+
+            raise
+
+    async def _discard_response(self) -> None:
+        assert self._reader is not None
+
+        data = await self._reader.readuntil(b"\r\n")
+        if not data.endswith(b"\r\n"):
+            msg = "reading data from stream returned incomplete response."
+            raise ConnectionError(msg)
+
+        # First character is a symbol that determines the data type,
+        # the rest is the actual data.
+        byte, response = data[:1], data[1:]
+
+        if byte in (
+            ByteResponse.SIMPLE_ERROR,
+            ByteResponse.SIMPLE_STRING,
+            ByteResponse.NUMBER,
+            ByteResponse.BIG_NUMBER,
+            ByteResponse.DOUBLE,
+            ByteResponse.BOOLEAN,
+            ByteResponse.NULL,
+        ):
+            return
+
+        elif byte in (
+            ByteResponse.BLOB_ERROR,
+            ByteResponse.BLOB_STRING,
+            ByteResponse.VERBATIM_STRING,
+        ):
+            await self._reader.read(int(response))
+            return
+        
+        elif byte in (
+            ByteResponse.ARRAY,
+            ByteResponse.SET,
+        ):
+            await self._discard_response()
+            return
+
+        elif byte == ByteResponse.MAP:
+            await self._discard_response()
+            await self._discard_response()
+            return
+        
+        elif byte == ByteResponse.PUSH:
+            # Can't just return None here as we actually need to consume the bytes.
+            # We need to error until these are implemented.
+            raise NotImplementedError
+
+        elif byte == ByteResponse.ATTRIBUTE:
+            raise NotImplementedError
+        
+        else:
+            # Unknown response type but we're ignoring it anyway.
+            return
+
+    async def discard_response(self, *, disconnect_on_error: bool = True) -> typing.Any:
+        try:
+            return await self._discard_response()
+
+        except OSError as exc:
+            if disconnect_on_error:
+                await self.disconnect()
+
+            msg = f"Failed to read from '{self.host}:{self.port}': {exc}"
+            raise ConnectionError(msg) from exc
+        
+        except BaseException:
+            if disconnect_on_error:
+                await self.disconnect()
 
             raise
 
@@ -303,11 +375,14 @@ class ActionableConnection:
     async def disconnect(self) -> None:
         await self.connection.disconnect()
 
-    async def write_command(self, command: protocol.CommandProto) -> None:
+    async def write_command(self, command: protocol.CommandProto, /) -> None:
         await self.connection.write_command(command)
 
-    async def read_response(self, disconnect_on_error: bool = True) -> typing.Any:
+    async def read_response(self, *, disconnect_on_error: bool = True) -> typing.Any:
         return await self.connection.read_response(disconnect_on_error=disconnect_on_error)
+
+    async def discard_response(self, *, disconnect_on_error: bool = True) -> None:
+        return await self.connection.discard_response(disconnect_on_error=disconnect_on_error)
 
     async def xread(
         self,
