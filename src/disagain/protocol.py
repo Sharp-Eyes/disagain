@@ -47,14 +47,14 @@ class ConnectionProto(typing.Protocol):
         """
         ...
 
-    async def read_response(self, *, disconnect_on_error: bool) -> typing.Any:  # noqa: ANN401
+    async def read_response(self, *, disconnect_on_error: bool) -> typing.Any | None:  # noqa: ANN401
         """Read the response to a previously executed command.
 
         This requires this connection to be alive.
         """
         ...
 
-    async def discard_response(self, *, disconnect_on_error: bool) -> typing.Any:  # noqa: ANN401
+    async def discard_response(self, *, disconnect_on_error: bool) -> None:
         """Discard the response to the previously executed command.
 
         This requires this connection to be alive.

@@ -88,6 +88,8 @@ class Connection:
             await con.write_command(command.Command(b"HELLO", _RESP3))
             hello = await con.read_response(disconnect_on_error=True)
 
+            assert hello is not None
+
             if hello[b"proto"] != _RESP3:
                 msg = "Failed to set redis protocol version to 3"
                 raise error.RedisError(msg)
@@ -199,7 +201,7 @@ class Connection:
         msg = "reading data from stream returned incomplete response."
         raise ConnectionError(msg)
 
-    async def _read_response(self) -> object:  # noqa: C901, PLR0911, PLR0912
+    async def _read_response(self) -> object | None:  # noqa: C901, PLR0911, PLR0912
         assert self._reader is not None
 
         data = await self._reader.readuntil(b"\r\n")
@@ -258,7 +260,7 @@ class Connection:
         msg = f"{byte} is not a valid response type"
         raise error.ResponseError(byte.decode("utf-8", errors="replace"), msg)
 
-    async def read_response(self, *, disconnect_on_error: bool = True) -> typing.Any:  # noqa: ANN401
+    async def read_response(self, *, disconnect_on_error: bool = True) -> typing.Any | None:  # noqa: ANN401
         """Read the response to a previously executed command.
 
         This requires this connection to be alive.
@@ -333,7 +335,7 @@ class Connection:
         # Unknown response type but we're ignoring the response anyway.
         return
 
-    async def discard_response(self, *, disconnect_on_error: bool = True) -> typing.Any:  # noqa: ANN401
+    async def discard_response(self, *, disconnect_on_error: bool = True) -> None:
         """Discard the response to the previously executed command.
 
         This requires this connection to be alive.
@@ -424,7 +426,7 @@ class ActionableConnection:
         """
         await self.connection.write_command(command)
 
-    async def read_response(self, *, disconnect_on_error: bool = True) -> typing.Any:  # noqa: ANN401
+    async def read_response(self, *, disconnect_on_error: bool = True) -> typing.Any | None:  # noqa: ANN401
         """Read the response to a previously executed command.
 
         This requires this connection to be alive.
@@ -474,6 +476,8 @@ class ActionableConnection:
 
         await self.connection.write_command(cmd)
         response = await self.connection.read_response(disconnect_on_error=True)
+        if response is None:
+            return None
 
         # Response is of shape
         #
