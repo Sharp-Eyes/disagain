@@ -12,7 +12,7 @@ from disagain import command, error, protocol
 __all__: collections.abc.Sequence[str] = ("Connection", "ActionableConnection",)
 
 
-ConnectHook: typing.TypeAlias = typing.Callable[["Connection"], typing.Coroutine[typing.Any, typing.Any, None]]
+ConnectHook: typing.TypeAlias = typing.Callable[["Connection"], typing.Coroutine[typing.Any, typing.Any, None]]    
 
 
 class ByteResponse(bytes, enum.Enum):
@@ -161,6 +161,18 @@ class Connection:
             self._close()
             raise
 
+    async def _read_bytes(self, n: int) -> bytes:
+        assert self._reader is not None
+        assert n > 0
+
+        response = await self._reader.read(n + 2)
+        
+        if response[-2:] == b"\r\n":
+            return response[:-2]
+
+        msg = "reading data from stream returned incomplete response."
+        raise ConnectionError(msg)
+
     async def _read_response(self) -> object:
         assert self._reader is not None
 
@@ -168,9 +180,6 @@ class Connection:
         if not data.endswith(b"\r\n"):
             msg = "reading data from stream returned incomplete response."
             raise ConnectionError(msg)
-
-        elif data == b"\r\n":
-            return await self._read_response()
 
         # First character is a symbol that determines the data type,
         # the rest is the actual data.
@@ -180,19 +189,19 @@ class Connection:
             raise error.ResponseError.from_response(response)
             
         if byte == ByteResponse.BLOB_ERROR:
-            response = await self._reader.read(int(response))
+            response = await self._read_bytes(int(response))
             raise error.ResponseError.from_response(response)
 
         elif byte == ByteResponse.SIMPLE_STRING:
             return response
         
         elif byte == ByteResponse.BLOB_STRING:
-            return await self._reader.read(int(response))
+            return await self._read_bytes(int(response))
 
         elif byte == ByteResponse.VERBATIM_STRING:
             # TODO: Maybe store the format instead of discarding it.
-            return (await self._reader.read(int(response)))[4:]
-        
+            return (await self._read_bytes(int(response)))[4:]
+
         elif byte in (ByteResponse.NUMBER, ByteResponse.BIG_NUMBER):
             return int(response)
         
