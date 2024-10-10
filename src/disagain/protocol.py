@@ -1,6 +1,9 @@
 import collections.abc
 import typing
 
+if typing.TYPE_CHECKING:
+    import typing_extensions
+
 __all__: collections.abc.Sequence[str] = ("CommandProto", "ConnectionProto")
 
 
@@ -14,7 +17,7 @@ class CommandProto(typing.Protocol):
 
 class ConnectionProto(typing.Protocol):
     @classmethod
-    async def from_url(cls, url: str, /) -> "ConnectionProto": ...
+    async def from_host_port(cls, host: str, port: int, /) -> "typing_extensions.Self": ...
 
     async def connect(self) -> None: ...
 

@@ -9,6 +9,9 @@ import weakref
 
 from disagain import command, error, protocol
 
+if typing.TYPE_CHECKING:
+    import typing_extensions
+
 __all__: collections.abc.Sequence[str] = ("Connection", "ActionableConnection",)
 
 
@@ -52,16 +55,17 @@ class Connection:
     _writer: asyncio.StreamWriter | None = dataclasses.field(default=None, repr=False)
 
     @classmethod
-    async def from_url(cls, url: str, /):
+    async def from_url(cls, url: str, /) -> "typing_extensions.Self":
         parsed = urllib.parse.urlparse(url)
         if not parsed.hostname or not parsed.port or parsed.scheme != "redis":
             msg = "Only urls of scheme 'redis://host:port' are supported"
             raise ValueError(msg)
+        
+        return await cls.from_host_port(parsed.hostname, parsed.port)
 
-        self = cls(
-            host=parsed.hostname,
-            port=parsed.port,
-        )
+    @classmethod
+    async def from_host_port(cls, host: str, port: int, /) -> "typing_extensions.Self":
+        self = cls(host=host, port=port,)
 
         async def _set_resp3(con: protocol.ConnectionProto) -> None:
             await con.write_command(command.Command(b"HELLO", b"3"))
@@ -75,7 +79,6 @@ class Connection:
 
         await self.connect()
         return self
-    
 
     def __del__(self):
         if getattr(self, "_writer", None):
@@ -269,9 +272,29 @@ class ActionableConnection:
         url: str,
         /,
         *,
-        connection_class: type[protocol.ConnectionProto] = Connection,
-    ) -> "ActionableConnection":
-        connection = await connection_class.from_url(url)
+        connection_class: type[protocol.ConnectionProto] = Connection
+    ) -> "typing_extensions.Self":
+        parsed = urllib.parse.urlparse(url)
+        if not parsed.hostname or not parsed.port or parsed.scheme != "redis":
+            msg = "Only urls of scheme 'redis://host:port' are supported"
+            raise ValueError(msg)
+        
+        return await cls.from_host_port(
+            parsed.hostname,
+            parsed.port,
+            connection_class=connection_class
+        )
+
+    @classmethod
+    async def from_host_port(
+        cls,
+        host: str,
+        port: int,
+        /,
+        *,
+        connection_class: type[protocol.ConnectionProto] = Connection
+    ) -> "typing_extensions.Self":
+        connection = await connection_class.from_host_port(host, port)
         return cls(connection)
 
     async def connect(self) -> None:
