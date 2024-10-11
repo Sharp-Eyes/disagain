@@ -9,7 +9,7 @@ if typing.TYPE_CHECKING:
 __all__: collections.abc.Sequence[str] = ("transform_xread",)
 
 
-XREADReturn: typing.TypeAlias = dict[bytes, list["StreamEntry"]]
+XREADResponse: typing.TypeAlias = dict[bytes, list["StreamEntry"]]
 
 
 def _pairwise_to_dict(arg: collections.abc.Iterable[bytes]) -> dict[bytes, bytes]:
@@ -38,7 +38,7 @@ class StreamEntry(typing.NamedTuple):
         return cls(raw[0], _pairwise_to_dict(raw[1]))
 
 
-def transform_xread(data: dict[bytes, typing.Any]) -> XREADReturn:
+def transform_xread(data: dict[bytes, typing.Any]) -> XREADResponse:
     """Transform Redis XREAD output into a more easily handleable shape."""
     # Response is of shape
     #

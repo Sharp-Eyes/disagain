@@ -435,13 +435,33 @@ class ActionableConnection:
         """
         return await self.connection.discard_response(disconnect_on_error=disconnect_on_error)
 
+    @typing.overload
+    async def xread(
+        self,
+        streams: collections.abc.Mapping[str | bytes, str | bytes | int],
+        *,
+        count: int | None = None,
+        block: typing.Literal[0],
+    ) -> transform.XREADResponse:
+        ...
+
+    @typing.overload
     async def xread(
         self,
         streams: collections.abc.Mapping[str | bytes, str | bytes | int],
         *,
         count: int | None = None,
         block: int | None = None,
-    ) -> transform.XREADReturn | None:
+    ) -> transform.XREADResponse | None:
+        ...
+
+    async def xread(
+        self,
+        streams: collections.abc.Mapping[str | bytes, str | bytes | int],
+        *,
+        count: int | None = None,
+        block: int | None = None,
+    ) -> transform.XREADResponse | None:
         """Read data from one or multiple streams.
 
         Returns all stream entries after the provided id. Valid ids include any
