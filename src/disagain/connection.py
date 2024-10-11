@@ -501,3 +501,25 @@ class ActionableConnection:
             return transform.transform_xread(response)
 
         return None
+
+    async def hget(self, key: str | bytes, field: str | bytes) -> bytes | None:
+        """Return the value associated with ``field`` in the hash stored at ``key``.
+
+        Returns ``None`` if the key or field could not be found.
+
+        See also: https://redis.io/docs/latest/commands/hget/
+        """
+        cmd = command.Command("HGET", key, field)
+        await self.connection.write_command(cmd)
+        return await self.connection.read_response(disconnect_on_error=True)
+
+    async def hgetall(self, key: str | bytes) -> collections.abc.Mapping[bytes, bytes] | None:
+        """Return all fields and values of the hash stored at ``key``.
+
+        Returns ``None`` if the key or field could not be found.
+
+        See also: https://redis.io/docs/latest/commands/hgetall/
+        """
+        cmd = command.Command("HGETALL", key)
+        await self.connection.write_command(cmd)
+        return await self.connection.read_response(disconnect_on_error=True)
