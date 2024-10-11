@@ -456,6 +456,10 @@ class ActionableConnection:
 
         See also: https://redis.io/docs/latest/commands/xread/
         """
+        if not streams:
+            msg = "At least 1 stream must be provided"
+            raise error.RedisError(msg)
+
         cmd = command.Command(b"XREAD")
 
         if count is not None:
@@ -465,8 +469,11 @@ class ActionableConnection:
             cmd.arg(b"BLOCK").arg(block)
 
         cmd.arg(b"STREAMS")
-        for stream, start_id in streams.items():
-            cmd.arg(stream).arg(start_id)
+        for stream in streams:
+            cmd.arg(stream)
+
+        for start_id in streams.values():
+            cmd.arg(start_id)
 
         await self.connection.write_command(cmd)
         response = await self.connection.read_response(disconnect_on_error=True)
