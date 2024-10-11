@@ -9,7 +9,7 @@ import typing
 import urllib.parse
 import weakref
 
-from disagain import command, error, protocol
+from disagain import command, error, protocol, transform
 
 if typing.TYPE_CHECKING:
     import typing_extensions
@@ -357,11 +357,6 @@ class Connection:
             raise
 
 
-def _list_to_dict(arg: list[bytes]) -> dict[bytes, bytes]:
-    arg_iter = iter(arg)
-    return dict(zip(arg_iter, arg_iter, strict=True))
-
-
 @dataclasses.dataclass(slots=True)
 class ActionableConnection:
     """High-level connection implementation.
@@ -446,7 +441,7 @@ class ActionableConnection:
         *,
         count: int | None = None,
         block: int | None = None,
-    ) -> typing.Any:  # noqa: ANN401
+    ) -> transform.XREADReturn | None:
         """Read data from one or multiple streams.
 
         Returns all stream entries after the provided id. Valid ids include any
@@ -461,7 +456,6 @@ class ActionableConnection:
 
         See also: https://redis.io/docs/latest/commands/xread/
         """
-        # TODO: Proper xread return type
         cmd = command.Command(b"XREAD")
 
         if count is not None:
@@ -476,32 +470,7 @@ class ActionableConnection:
 
         await self.connection.write_command(cmd)
         response = await self.connection.read_response(disconnect_on_error=True)
-        if response is None:
-            return None
+        if response:
+            return transform.transform_xread(response)
 
-        # Response is of shape
-        #
-        # dict: stream name -> [entries...]
-        #              b        entries: [id, [data...]]
-        #                                 b    data: [key 1, value 1, key 2, value 2, ...]
-        #                                             b      b        b      b
-        # We transform this into
-        #
-        # dict: stream name -> [entries...]
-        #              b        entries: [StreamEntry(id, {data}), ...]
-        #                                             b    data: key -> value
-        #                                                        b      b
-
-        return {
-            stream_name: list(map(StreamEntry.from_raw, entries))
-            for stream_name, entries in response.items()
-        }
-
-
-class StreamEntry(typing.NamedTuple):
-    id: bytes
-    data: collections.abc.Mapping[bytes, bytes]
-
-    @classmethod
-    def from_raw(cls, raw: typing.Any) -> "typing_extensions.Self":  # noqa: ANN401
-        return cls(raw[0], _list_to_dict(raw[1]))
+        return None
