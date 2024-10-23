@@ -10,25 +10,20 @@ async def _main() -> None:
         con = await client.get_connection()
 
         # XREAD COUNT 1 BLOCK 10000 STREAMS message_interaction:0 0
-        r1 = await con.xread({"message_interaction:0": 0}, count=1, block=10000)
-        print(r1)  # noqa: T201
+        r1 = await con.hset("foo", foo="bar", field="value")
+        print(r1, type(r1))
 
-        # or (i wish python supported this without parentheses)
-        cmd = (
-            disagain.Command("XREAD")
-                .arg("COUNT")
-                .arg(1)
-                .arg("BLOCK")
-                .arg(10000)
-                .arg("STREAMS")
-                .arg("message_interaction:0")
-                .arg(0)
-        )
-        r2 = await cmd.execute(con)
-        print(r2)  # noqa: T201
+        r2 = await con.hget("foo", "foo")
+        print(r2, type(r2))
 
-        # NOTE: The high-level xread command transforms the output to a more
-        #       user-friendly mapping type.
+        r3 = await con.hgetall("foo")
+        print(r3)
+
+        r4 = await con.hdel("foo", "field")
+        print(r4)
+
+        r5 = await con.hgetall("foo")
+        print(r5)
 
 
 asyncio.run(_main())

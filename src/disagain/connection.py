@@ -502,10 +502,43 @@ class ActionableConnection:
 
         return None
 
-    async def hget(self, key: str | bytes, field: str | bytes) -> bytes | None:
-        """Return the value associated with ``field`` in the hash stored at ``key``.
+    async def hset(
+        self,
+        key: str | bytes,
+        items: collections.abc.Mapping[str | bytes, str | bytes | int | float] | None = None,
+        **items_kw: str | bytes | int | float,
+    ) -> int:
+        """Set the specified fields to their respective values in the hash stored at key.
 
-        Returns ``None`` if the key or field could not be found.
+        Parameters items and items_kw hold field/value pairs that are to be
+        stored. The items parameter can be omitted under most circumstances,
+        but is there for when your keys are bytes instead of strings, or when
+        the field names are not valid python identifiers.
+
+        Returns the number of fields that have been created.
+
+        See also: https://redis.io/docs/latest/commands/hset/
+        """
+        if not items and not items_kw:
+            msg = "at least one field/value pair must be provided."
+            raise error.RedisError(msg)
+
+        cmd = command.Command("HSET", key)
+        if items:
+            for field, value in items.items():
+                cmd.arg(field).arg(value)
+
+        for field, value in items_kw.items():
+            cmd.arg(field).arg(value)
+
+        await self.connection.write_command(cmd)
+        return await self.connection.read_response(disconnect_on_error=True) or 0
+
+    async def hget(self, key: str | bytes, field: str | bytes) -> bytes | None:
+        """Return the value associated with field in the hash stored at key.
+
+        Returns the value as bytes if found, otherwise returns None if either
+        the key does not exist or the field does not exist on the hash.
 
         See also: https://redis.io/docs/latest/commands/hget/
         """
@@ -513,13 +546,25 @@ class ActionableConnection:
         await self.connection.write_command(cmd)
         return await self.connection.read_response(disconnect_on_error=True)
 
-    async def hgetall(self, key: str | bytes) -> collections.abc.Mapping[bytes, bytes] | None:
-        """Return all fields and values of the hash stored at ``key``.
+    async def hgetall(self, key: str | bytes) -> collections.abc.Mapping[bytes, bytes]:
+        """Return all fields and values in the hash stored at key.
 
-        Returns ``None`` if the key or field could not be found.
+        Returns a mapping of all field/value pairs, or None if the key does not
+        exist.
 
         See also: https://redis.io/docs/latest/commands/hgetall/
         """
         cmd = command.Command("HGETALL", key)
         await self.connection.write_command(cmd)
-        return await self.connection.read_response(disconnect_on_error=True)
+        return await self.connection.read_response(disconnect_on_error=True) or {}
+
+    async def hdel(self, key: str | bytes, *fields: str | bytes) -> int:
+        """Remove the specified fields from the hash stored at key.
+
+        Returns the number of fields that have been removed.
+
+        See also: https://redis.io/docs/latest/commands/hdel/
+        """
+        cmd = command.Command("HDEL", key, *fields)
+        await self.connection.write_command(cmd)
+        return await self.connection.read_response(disconnect_on_error=True) or 0
